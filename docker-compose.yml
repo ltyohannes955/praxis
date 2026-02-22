@@ -1,0 +1,122 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: praxis-postgres
+    environment:
+      POSTGRES_USER: praxis
+      POSTGRES_PASSWORD: praxis
+      POSTGRES_DB: praxis
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U praxis"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: praxis-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: praxis-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: praxis-api
+    ports:
+      - "5000:5000"
+    environment:
+      DATABASE_URL: postgresql://praxis:praxis@postgres:5432/praxis
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      OLLAMA_BASE_URL: http://ollama:11434
+      AI_MODEL: mistral
+      NODE_ENV: development
+      PORT: "5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    volumes:
+      - ./apps/api:/app
+      - /app/node_modules
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    container_name: praxis-worker
+    environment:
+      DATABASE_URL: postgresql://praxis:praxis@postgres:5432/praxis
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      OLLAMA_BASE_URL: http://ollama:11434
+      AI_MODEL: mistral
+      NODE_ENV: development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    volumes:
+      - ./apps/worker:/app
+      - /app/node_modules
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: praxis-web
+    ports:
+      - "3001:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://api:5000
+      NEXT_PUBLIC_BETTER_AUTH_URL: http://api:5000
+    depends_on:
+      - api
+    volumes:
+      - ./apps/web:/app
+      - /app/node_modules
+      - /app/.next
+
+volumes:
+  postgres_data:
+  redis_data:
+  ollama_data:
+
+networks:
+  default:
+    name: praxis-network
